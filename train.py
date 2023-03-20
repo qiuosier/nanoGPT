@@ -22,6 +22,7 @@ import math
 import pickle
 from contextlib import nullcontext
 
+import fsspec
 import numpy as np
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -44,7 +45,8 @@ wandb_log = False # disabled by default
 wandb_project = 'owt'
 wandb_run_name = 'gpt2' # 'run' + str(time.time())
 # data
-dataset = 'openwebtext'
+data_dir = os.path.join(os.path.dirname(__file__), 'data')
+data_uri = data_dir
 gradient_accumulation_steps = 5 # used to simulate larger batch sizes
 batch_size = 12 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 1024
@@ -95,7 +97,7 @@ else:
     gradient_accumulation_steps *= 8 # simulate 8 gpus
 
 if master_process:
-    os.makedirs(out_dir, exist_ok=True)
+    fsspec.filesystem("oci").makedirs(out_dir, exist_ok=True)
 torch.manual_seed(1337 + seed_offset)
 torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
 torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
@@ -104,8 +106,19 @@ device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.aut
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
+# Load data to local
+if data_uri != data_dir:
+    for filename in ["train.bin", "val.bin"]:
+        file_uri = os.path.join(data_uri, filename)
+        print(f"Downloading {file_uri}")
+        fs = fsspec.filesystem("oci")
+        fs.get(
+            file_uri,
+            os.path.join(data_dir, filename),
+            callback=fsspec.callbacks.TqdmCallback()
+        )
+
 # poor man's data loader
-data_dir = os.path.join('data', dataset)
 train_data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
 val_data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
 def get_batch(split):
@@ -127,8 +140,8 @@ best_val_loss = 1e9
 # attempt to derive vocab_size from the dataset
 meta_path = os.path.join(data_dir, 'meta.pkl')
 meta_vocab_size = None
-if os.path.exists(meta_path):
-    with open(meta_path, 'rb') as f:
+if fsspec.filesystem("oci").exists(meta_path):
+    with fsspec.open(meta_path, 'rb') as f:
         meta = pickle.load(f)
     meta_vocab_size = meta['vocab_size']
     print(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
@@ -149,7 +162,8 @@ elif init_from == 'resume':
     print(f"Resuming training from {out_dir}")
     # resume training from a checkpoint.
     ckpt_path = os.path.join(out_dir, 'ckpt.pt')
-    checkpoint = torch.load(ckpt_path, map_location=device)
+    with fsspec.open(ckpt_path) as fp:
+        checkpoint = torch.load(fp, map_location=device)
     checkpoint_model_args = checkpoint['model_args']
     # force these config attributes to be equal otherwise we can't even resume training
     # the rest of the attributes (e.g. dropout) can stay as desired from command line
@@ -272,7 +286,8 @@ while True:
                     'config': config,
                 }
                 print(f"saving checkpoint to {out_dir}")
-                torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
+                with fsspec.open(os.path.join(out_dir, 'ckpt.pt'), 'w') as fp:
+                    torch.save(checkpoint, fp)
     if iter_num == 0 and eval_only:
         break
 
