@@ -23,6 +23,7 @@ import pickle
 from contextlib import nullcontext
 
 import fsspec
+import mlflow
 import numpy as np
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -96,6 +97,17 @@ else:
     seed_offset = 0
     gradient_accumulation_steps *= 8 # simulate 8 gpus
 
+# Log parameters/tags to mlflow
+if master_process:
+    mlflow.log_params(config)
+    mlflow.log_params({
+        "WORLD_SIZE": os.environ.get("WORLD_SIZE", 1),
+        "DEVICE_COUNT_PER_NODE": torch.cuda.device_count()
+    })
+    if "JOB_RUN_OCID" in os.environ:
+        mlflow.set_tag("JOB_RUN_OCID", os.environ["JOB_RUN_OCID"])
+    mlflow.log_artifact(__file__, os.path.basename(__file__))
+
 if master_process:
     fsspec.filesystem("oci").makedirs(out_dir, exist_ok=True)
 torch.manual_seed(1337 + seed_offset)
@@ -109,14 +121,14 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=
 # Load data to local
 if data_uri != data_dir:
     for filename in ["train.bin", "val.bin"]:
+        file_path = os.path.join(data_dir, filename)
+        if os.path.exists(file_path):
+            print(f"{file_path} exists, skipping downloading.")
+            continue
         file_uri = os.path.join(data_uri, filename)
         print(f"Downloading {file_uri}")
         fs = fsspec.filesystem("oci")
-        fs.get(
-            file_uri,
-            os.path.join(data_dir, filename),
-            callback=fsspec.callbacks.TqdmCallback()
-        )
+        fs.get(file_uri, file_path, callback=fsspec.callbacks.TqdmCallback())
 
 # poor man's data loader
 train_data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
@@ -265,6 +277,10 @@ while True:
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
         losses = estimate_loss()
+        mlflow.log_metrics({
+            "est_train_loss": losses['train'],
+            "est_val_loss": losses['val'],
+        }, step=iter_num)
         print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
         if wandb_log:
             wandb.log({
@@ -285,8 +301,10 @@ while True:
                     'best_val_loss': best_val_loss,
                     'config': config,
                 }
+                mlflow.pytorch.log_state_dict(checkpoint, "checkpoint")
+                mlflow.pytorch.log_model(raw_model,"model.pt")
                 print(f"saving checkpoint to {out_dir}")
-                with fsspec.open(os.path.join(out_dir, 'ckpt.pt'), 'w') as fp:
+                with fsspec.open(os.path.join(out_dir, 'ckpt.pt'), 'wb') as fp:
                     torch.save(checkpoint, fp)
     if iter_num == 0 and eval_only:
         break
@@ -326,6 +344,12 @@ while True:
             mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
             running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
         print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+        mlflow.log_metrics({
+            "train_loss": lossf,
+            "step_training_time": dt,
+            "running_mfu": running_mfu,
+            "learning_rate": lr
+        }, step=iter_num)
     iter_num += 1
     local_iter_num += 1
 
