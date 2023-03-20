@@ -102,7 +102,8 @@ if master_process:
     mlflow.log_params(config)
     mlflow.log_params({
         "WORLD_SIZE": os.environ.get("WORLD_SIZE", 1),
-        "DEVICE_COUNT_PER_NODE": torch.cuda.device_count()
+        "DEVICE_COUNT_PER_NODE": torch.cuda.device_count(),
+        "DEVICE_NAME": torch.cuda.get_device_name()
     })
     if "JOB_RUN_OCID" in os.environ:
         mlflow.set_tag("JOB_RUN_OCID", os.environ["JOB_RUN_OCID"])
