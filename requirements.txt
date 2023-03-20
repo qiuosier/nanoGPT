@@ -1,0 +1,8 @@
+requests
+aiohttp
+fsspec
+ocifs
+tqdm
+transformers<3
+datasets<3
+tiktoken<3
