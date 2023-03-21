@@ -107,7 +107,7 @@ if master_process:
     })
     if "JOB_RUN_OCID" in os.environ:
         mlflow.set_tag("JOB_RUN_OCID", os.environ["JOB_RUN_OCID"])
-    mlflow.log_artifact(__file__, os.path.basename(__file__))
+    mlflow.log_artifact(__file__)
 
 if master_process:
     fsspec.filesystem("oci").makedirs(out_dir, exist_ok=True)
