@@ -303,7 +303,6 @@ while True:
                     'config': config,
                 }
                 mlflow.pytorch.log_state_dict(checkpoint, "checkpoint")
-                mlflow.pytorch.log_model(raw_model,"model.pt")
                 print(f"saving checkpoint to {out_dir}")
                 with fsspec.open(os.path.join(out_dir, 'ckpt.pt'), 'wb') as fp:
                     torch.save(checkpoint, fp)
