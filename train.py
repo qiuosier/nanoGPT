@@ -129,7 +129,7 @@ if data_uri != data_dir:
         file_uri = os.path.join(data_uri, filename)
         print(f"Downloading {file_uri}")
         fs = fsspec.filesystem("oci")
-        fs.get(file_uri, file_path, callback=fsspec.callbacks.TqdmCallback())
+        fs.get_file(file_uri, file_path, callback=fsspec.callbacks.TqdmCallback())
 
 # poor man's data loader
 train_data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
