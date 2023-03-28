@@ -127,9 +127,17 @@ if data_uri != data_dir:
             print(f"{file_path} exists, skipping downloading.")
             continue
         file_uri = os.path.join(data_uri, filename)
-        print(f"Downloading {file_uri}")
-        fs = fsspec.filesystem("oci")
-        fs.get_file(file_uri, file_path, callback=fsspec.callbacks.TqdmCallback())
+        print(f"Downloading {file_uri}", flush=True)
+        remote_file = urlparse(file_uri)
+        if remote_file.scheme == "oci":
+            subprocess.check_call(
+                f"oci os object get -bn {remote_file.username} --file {file_path}" +
+                f" --name {remote_file.path.lstrip('/')}",
+                shell=True
+            )
+        else:
+            fs = fsspec.filesystem("oci")
+            fs.get_file(file_uri, file_path, callback=fsspec.callbacks.TqdmCallback())
 
 # poor man's data loader
 train_data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
