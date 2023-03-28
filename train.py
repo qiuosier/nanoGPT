@@ -20,7 +20,10 @@ import os
 import time
 import math
 import pickle
+import subprocess
+import threading
 from contextlib import nullcontext
+from urllib.parse import urlparse
 
 import fsspec
 import mlflow
@@ -75,6 +78,7 @@ backend = 'nccl' # 'nccl', 'gloo', etc.
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
 dtype = 'bfloat16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
 compile = True # use PyTorch 2.0 to compile the model to be faster
+checkpoint_prefix = "checkpoint"
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
@@ -109,8 +113,13 @@ if master_process:
         mlflow.set_tag("JOB_RUN_OCID", os.environ["JOB_RUN_OCID"])
     mlflow.log_artifact(__file__)
 
+parsed_out_dir = urlparse(out_dir)
+temp_out_dir = "checkpoints"
+os.makedirs(temp_out_dir, exist_ok=True)
 if master_process:
-    fsspec.filesystem("oci").makedirs(out_dir, exist_ok=True)
+    if parsed_out_dir.scheme != "file":
+        fsspec.filesystem(parsed_out_dir.scheme).makedirs(out_dir, exist_ok=True)
+
 torch.manual_seed(1337 + seed_offset)
 torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
 torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
@@ -265,6 +274,13 @@ def get_lr(it):
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
     return min_lr + coeff * (learning_rate - min_lr)
 
+def upload_checkpoint(local_checkpoint):
+    fs = fsspec.filesystem(parsed_out_dir.scheme)
+    remote_checkpoint = os.path.join(out_dir, os.path.basename(local_checkpoint))
+    fs.upload(local_checkpoint, remote_checkpoint)
+    print(f"Checkpoint uploaded to {remote_checkpoint}")
+
+
 # logging
 if wandb_log and master_process:
     import wandb
@@ -276,6 +292,7 @@ t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
 running_mfu = -1.0
+upload_thread = None
 while True:
 
     # determine and set the learning rate for this iteration
@@ -312,8 +329,13 @@ while True:
                 }
                 # mlflow.pytorch.log_state_dict(checkpoint, "checkpoint")
                 print(f"saving checkpoint to {out_dir}")
-                with fsspec.open(os.path.join(out_dir, 'ckpt.pt'), 'wb') as fp:
-                    torch.save(checkpoint, fp)
+                checkpoint_filename = checkpoint_prefix + str(iter_num).zfill(len(str(max_iters))) + '.pt'
+                checkpoint_local_path = os.path.join(temp_out_dir, checkpoint_filename)
+                torch.save(checkpoint_local_path)
+                upload_thread = threading.Thread(target=upload_checkpoint, args=(checkpoint_local_path,))
+                upload_thread.daemon = True
+                upload_thread.start()
+
     if iter_num == 0 and eval_only:
         break
 
@@ -364,6 +386,9 @@ while True:
     # termination conditions
     if iter_num > max_iters:
         break
+
+if upload_thread:
+    upload_thread.join()
 
 if ddp:
     destroy_process_group()
