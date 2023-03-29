@@ -331,7 +331,7 @@ while True:
                 print(f"saving checkpoint to {out_dir}")
                 checkpoint_filename = checkpoint_prefix + str(iter_num).zfill(len(str(max_iters))) + '.pt'
                 checkpoint_local_path = os.path.join(temp_out_dir, checkpoint_filename)
-                torch.save(checkpoint_local_path)
+                torch.save(checkpoint, checkpoint_local_path)
                 upload_thread = threading.Thread(target=upload_checkpoint, args=(checkpoint_local_path,))
                 upload_thread.daemon = True
                 upload_thread.start()
