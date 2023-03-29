@@ -30,7 +30,7 @@ import mlflow
 import numpy as np
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.distributed import init_process_group, destroy_process_group
+from torch.distributed import init_process_group, destroy_process_group, barrier
 
 from model import GPTConfig, GPT
 
@@ -128,8 +128,8 @@ device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.aut
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
-# Load data to local
-if data_uri != data_dir:
+# Load data to local, use only one process the handle this
+if ddp_local_rank == 0 and data_uri != data_dir:
     for filename in ["train.bin", "val.bin"]:
         file_path = os.path.join(data_dir, filename)
         if os.path.exists(file_path):
@@ -147,6 +147,9 @@ if data_uri != data_dir:
         else:
             fs = fsspec.filesystem("oci")
             fs.get_file(file_uri, file_path, callback=fsspec.callbacks.TqdmCallback())
+
+# For other ranks, wait for data before continue
+barrier()
 
 # poor man's data loader
 train_data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
