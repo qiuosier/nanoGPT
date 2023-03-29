@@ -141,7 +141,7 @@ if data_uri != data_dir:
         if remote_file.scheme == "oci":
             subprocess.check_call(
                 f"oci os object get -bn {remote_file.username} --file {file_path}" +
-                f" --name {remote_file.path.lstrip('/')}",
+                f" --name {remote_file.path.lstrip('/')} --auth resource_principal",
                 shell=True
             )
         else:
