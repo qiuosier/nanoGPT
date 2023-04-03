@@ -43,7 +43,7 @@ log_interval = 1
 eval_iters = 200
 eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
-init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
+init_from = 'scratch' # 'scratch', 'gpt2*' or checkpoint filename starting with "checkpoint_prefix"
 # wandb logging
 wandb_log = False # disabled by default
 wandb_project = 'owt'
@@ -116,6 +116,7 @@ if master_process:
 parsed_out_dir = urlparse(out_dir)
 temp_out_dir = "checkpoints"
 os.makedirs(temp_out_dir, exist_ok=True)
+print(f"Using {temp_out_dir} as temporary location for saving checkpoints.")
 if master_process:
     if parsed_out_dir.scheme != "file":
         fsspec.filesystem(parsed_out_dir.scheme).makedirs(out_dir, exist_ok=True)
@@ -136,7 +137,7 @@ if ddp_local_rank == 0 and data_uri != data_dir:
             print(f"{file_path} exists, skipping downloading.")
             continue
         file_uri = os.path.join(data_uri, filename)
-        print(f"Downloading {file_uri}", flush=True)
+        print(f"Downloading {file_uri} to {file_path}", flush=True)
         remote_file = urlparse(file_uri)
         if remote_file.scheme == "oci":
             subprocess.check_call(
@@ -166,7 +167,7 @@ def get_batch(split):
         x, y = x.to(device), y.to(device)
     return x, y
 
-# init these up here, can override if init_from='resume' (i.e. from a checkpoint)
+# init these up here, can override if init from a checkpoint
 iter_num = 0
 best_val_loss = 1e9
 
@@ -234,8 +235,9 @@ scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
 
 # optimizer
 optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
-if init_from == 'resume':
+if init_from.startswith(checkpoint_prefix):
     optimizer.load_state_dict(checkpoint['optimizer'])
+    print("Loaded optimizer from checkpoint.")
 
 # compile the model
 if compile:
