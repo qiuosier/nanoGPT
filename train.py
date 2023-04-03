@@ -284,6 +284,7 @@ def upload_checkpoint(local_checkpoint):
     remote_checkpoint = os.path.join(out_dir, os.path.basename(local_checkpoint))
     fs.upload(local_checkpoint, remote_checkpoint)
     print(f"Checkpoint uploaded to {remote_checkpoint}")
+    os.remove(local_checkpoint)
 
 
 # logging
